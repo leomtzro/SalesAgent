@@ -1,0 +1,98 @@
+# ============================================================================
+# THIS IS THE FILE YOU FILL IN. Everything the agent writes comes from here.
+# Replace every value below with your real offer. The placeholder text is an
+# example (a fulfillment/ops service sold to supplement brands) - overwrite it.
+# ============================================================================
+
+# --- What you sell -----------------------------------------------------------
+company_name: "Your Company"
+what_you_sell: >
+  One or two sentences, plain language. What the customer gets, not what you do.
+  Example: "We take over fulfillment and returns for supplement brands doing
+  $2M-$20M, so they stop losing margin to 3PL errors and stockouts."
+
+# The problem your buyer already feels before you call. Be specific and
+# concrete - the agent uses these to decide whether a company is a real fit.
+problems_you_solve:
+  - "Stockouts on best-sellers during promo spikes"
+  - "3PL mis-ships driving chargebacks and refund volume"
+  - "No visibility into landed cost per SKU"
+
+# --- Who you sell to (your ICP) ---------------------------------------------
+ideal_customer:
+  industries:
+    - "Supplements / nutraceuticals"
+    - "Functional beverage"
+  company_size: "20-200 employees"
+  revenue_range: "$2M-$50M annual revenue"
+  geographies:
+    - "United States"
+  # The job titles that can actually sign. Order matters - the agent looks for
+  # the first title it can find, top to bottom.
+  target_titles:
+    - "VP of Operations"
+    - "Head of Supply Chain"
+    - "COO"
+    - "Director of Fulfillment"
+    - "Founder"
+  # Titles to avoid even if they come up first - wrong department, no budget.
+  avoid_titles:
+    - "Recruiter"
+    - "Intern"
+    - "Software Engineer"
+
+# --- Buying signals ---------------------------------------------------------
+# Things that mean "they need this NOW". The agent searches for these and
+# scores prospects higher when it finds them. This is what turns a list into
+# a pipeline.
+buying_signals:
+  - "Raised a funding round in the last 12 months"
+  - "Launched a new SKU or product line recently"
+  - "Hiring for operations, supply chain, or fulfillment roles"
+  - "Expanding into retail or a new country"
+  - "Public complaints about shipping or delivery times"
+
+# Signals that mean don't bother - already solved, or can't buy.
+disqualifying_signals:
+  - "Already running their own in-house warehouse"
+  - "Fewer than 10 employees"
+  - "Appears to be pre-revenue"
+
+# --- Your proof -------------------------------------------------------------
+# The agent will only reference proof listed here. If you leave this empty,
+# the outreach it writes contains no claims about results - which is correct,
+# because inventing a case study is how you lose a deal and your reputation.
+proof_points:
+  - "Cut mis-ship rate from 4.1% to 0.6% for a $12M creatine brand in 90 days"
+  - "14 brands onboarded, average 11 days to go live"
+
+# Named customers you are allowed to mention. Leave empty if under NDA.
+reference_customers: []
+
+# --- How you want to sound --------------------------------------------------
+voice:
+  # Who the email is signed by.
+  sender_name: "Your Name"
+  sender_title: "Founder"
+  sender_phone: ""
+  sender_email: "you@yourcompany.com"
+  # Tone: direct | consultative | warm | blunt
+  tone: "direct"
+  # Hard cap on first-touch email length. Short wins; 120 is already generous.
+  max_email_words: 110
+  # Things you never want written in your name.
+  banned_phrases:
+    - "I hope this email finds you well"
+    - "circling back"
+    - "touching base"
+    - "synergy"
+    - "revolutionary"
+    - "game-changing"
+
+# --- The ask ----------------------------------------------------------------
+# What the first email actually asks for. Keep it small and specific.
+call_to_action: "Worth a 15-minute call this week to see if the numbers line up?"
+
+# Where prospects can opt out. Required for CAN-SPAM compliant cold email in
+# the US - the agent puts this line in every email it drafts.
+opt_out_line: "If this isn't relevant, reply 'no' and I won't follow up."

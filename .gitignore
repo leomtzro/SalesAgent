@@ -1,0 +1,22 @@
+# Secrets - never commit these
+.env
+*.pem
+
+# Agent output (real prospect data; keep it off GitHub)
+outputs/*.jsonl
+outputs/*.csv
+outputs/briefs/*.md
+!outputs/briefs/.gitkeep
+
+# Your real offer config (config/offer.yaml is tracked as a template;
+# if you keep pricing private, uncomment the next line)
+# config/offer.yaml
+config/targets.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
