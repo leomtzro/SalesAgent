@@ -20,7 +20,7 @@ import anthropic
 from . import store
 from .client import _model, build_client
 from .contact import enrich_emails
-from .models import Prospect
+from .models import IdentityConfidence, Prospect
 from .offer import Offer, load_offer
 from .outreach import lint_outreach, write_outreach
 from .research import research_prospect
@@ -131,6 +131,26 @@ def run_one(
                 warnings.append(
                     f"--verified-only dropped {len(dropped)} guessed address(es)."
                 )
+        # A name from a third-party directory is the normal case, not an
+        # exception - so say so on every brief rather than burying it.
+        ident = findings.person.identity_confidence
+        if ident == IdentityConfidence.AGGREGATOR_ONLY:
+            warnings.append(
+                f"{findings.person.full_name or 'This name'} comes only from a "
+                "third-party directory. Confirm the name and that they still "
+                "hold the role before you use it - directory data goes stale."
+            )
+        elif ident == IdentityConfidence.ROLE_ONLY:
+            ask = findings.person.ask_switchboard_for or findings.person.title
+            warnings.append(
+                f"No name found, but the role is real. Call the main line and "
+                f"ask for {ask!r}."
+            )
+        elif ident == IdentityConfidence.UNKNOWN and findings.person.full_name:
+            warnings.append(
+                "The research did not establish where this name came from. "
+                "Treat it as unverified."
+            )
         result.warnings = warnings
 
         prospect = Prospect(
@@ -150,7 +170,9 @@ def run_one(
             prospect.outreach = write_outreach(
                 client, offer, findings, research_notes=notes
             )
-            result.lint = lint_outreach(prospect.outreach, offer)
+            result.lint = lint_outreach(
+                prospect.outreach, offer, prospect.person
+            )
         elif write_outreach_copy:
             result.warnings.append(
                 f"Fit score {prospect.fit_score} is below the "

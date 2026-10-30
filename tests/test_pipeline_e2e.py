@@ -390,3 +390,163 @@ class TestLint:
 
         problems = lint_outreach(OUTREACH, offer)
         assert problems == [], problems
+
+
+# --- identity confidence ----------------------------------------------------
+#
+# The live research run that motivated these: the decision maker's name was
+# only on a third-party directory, and the org structure had to be read out of
+# job postings. Both are the normal case, so both get pinned here.
+
+
+def _findings_with(**person_overrides) -> ResearchFindings:
+    data = FINDINGS.model_dump()
+    data["person"].update(person_overrides)
+    return ResearchFindings.model_validate(data)
+
+
+class IdentityClient(FakeClient):
+    """A fake whose extraction returns a chosen identity_confidence."""
+
+    def __init__(self, findings: ResearchFindings):
+        super().__init__()
+        self._findings = findings
+        self.messages.parse = self._parse
+
+    def _parse(self, **kw):
+        self.messages.parse_calls.append(kw)
+        schema = kw["output_format"]
+        parsed = self._findings if schema is ResearchFindings else OUTREACH
+        return FakeResponse([FakeBlock("text", text="{}")], parsed=parsed)
+
+
+class TestIdentityConfidence:
+    def test_aggregator_only_warns_about_staleness(self, sandbox, offer):
+        from prospector.models import IdentityConfidence
+
+        findings = _findings_with(
+            identity_confidence=IdentityConfidence.AGGREGATOR_ONLY.value,
+            identity_source_url="https://theorg.example/acme",
+        )
+        result = pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"),
+            client=IdentityClient(findings),
+            offer=offer,
+        )
+        assert result.ok, result.error
+        assert any(
+            "third-party directory" in w for w in result.warnings
+        ), result.warnings
+        brief = result.brief_path.read_text()
+        assert "DIRECTORY ONLY" in brief
+
+    def test_role_only_still_gives_a_play(self, sandbox, offer):
+        """No name is not a dead end - the switchboard route must survive."""
+        from prospector.models import IdentityConfidence
+
+        findings = _findings_with(
+            full_name=None,
+            identity_confidence=IdentityConfidence.ROLE_ONLY.value,
+            role_confirmed_by="A Quality PM posting reports to the VP of Ops",
+            ask_switchboard_for="whoever runs fulfillment and 3PL",
+        )
+        result = pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"),
+            client=IdentityClient(findings),
+            offer=offer,
+        )
+        assert result.ok, result.error
+        assert any("ask for" in w.lower() for w in result.warnings), result.warnings
+
+        brief = result.brief_path.read_text()
+        assert "ROLE ONLY" in brief
+        assert "whoever runs fulfillment and 3PL" in brief
+        assert "Quality PM posting" in brief
+
+    def test_confirmed_identity_raises_no_warning(self, sandbox, offer):
+        from prospector.models import IdentityConfidence
+
+        findings = _findings_with(
+            identity_confidence=IdentityConfidence.CONFIRMED.value,
+            identity_source_url="https://acmesupplements.com/team",
+            evidence_date="2026-09",
+        )
+        result = pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"),
+            client=IdentityClient(findings),
+            offer=offer,
+        )
+        assert not any(
+            "directory" in w.lower() or "unverified" in w.lower()
+            for w in result.warnings
+        ), result.warnings
+        brief = result.brief_path.read_text()
+        assert "CONFIRMED" in brief
+        assert "2026-09" in brief
+
+    def test_unsourced_name_is_flagged(self, sandbox, offer):
+        """A name with no stated provenance must not read as a fact."""
+        findings = _findings_with(identity_confidence="unknown")
+        result = pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"),
+            client=IdentityClient(findings),
+            offer=offer,
+        )
+        assert any("unverified" in w.lower() for w in result.warnings), result.warnings
+
+    def test_identity_reaches_the_writer(self, sandbox, offer):
+        """The writer must be told how sure the name is, or it can't comply."""
+        from prospector.models import IdentityConfidence
+
+        findings = _findings_with(
+            identity_confidence=IdentityConfidence.ROLE_ONLY.value, full_name=None
+        )
+        client = IdentityClient(findings)
+        pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"), client=client, offer=offer
+        )
+        outreach_call = client.messages.parse_calls[-1]
+        prompt = outreach_call["messages"][0]["content"]
+        assert "role_only" in prompt
+        assert "identity_confidence" in outreach_call["system"]
+
+    def test_csv_carries_identity_columns(self, sandbox, offer):
+        from prospector.models import IdentityConfidence
+
+        findings = _findings_with(
+            full_name=None,
+            identity_confidence=IdentityConfidence.ROLE_ONLY.value,
+            ask_switchboard_for="whoever runs ops",
+        )
+        pipeline.run_one(
+            pipeline.Target(company="Acme Supplements"),
+            client=IdentityClient(findings),
+            offer=offer,
+        )
+        store.write_csv(store.read_all(store.JSONL_PATH), store.CSV_PATH)
+        text = store.CSV_PATH.read_text()
+        assert "identity_confidence" in text
+        assert "role_only" in text
+        assert "whoever runs ops" in text
+
+
+class TestDraftLinting:
+    def test_placeholder_is_caught(self, offer):
+        from prospector.outreach import lint_outreach
+
+        draft = OUTREACH.model_copy(
+            update={"email_body": "Hi [First Name], saw {{company}} raised."}
+        )
+        problems = lint_outreach(draft, offer)
+        assert sum("placeholder" in p for p in problems) == 2, problems
+
+    def test_limp_greeting_caught_only_when_nameless(self, offer):
+        from prospector.outreach import lint_outreach
+
+        draft = OUTREACH.model_copy(
+            update={"email_body": "Hi there, saw the raise. " + OUTREACH.email_body}
+        )
+        nameless = lint_outreach(draft, offer, Person())
+        named = lint_outreach(draft, offer, Person(full_name="Jane Doe"))
+        assert any("hi there" in p.lower() for p in nameless)
+        assert not any("hi there" in p.lower() for p in named)

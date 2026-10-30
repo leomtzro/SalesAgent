@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
 
-from .models import Confidence, Prospect
+from .models import Confidence, IdentityConfidence, Prospect
 
 OUTPUT_DIR = Path("outputs")
 JSONL_PATH = OUTPUT_DIR / "prospects.jsonl"
@@ -21,9 +21,24 @@ BRIEF_DIR = OUTPUT_DIR / "briefs"
 
 CSV_COLUMNS = [
     "researched_at", "company", "domain", "person", "title", "seniority",
-    "linkedin", "best_email", "email_confidence", "best_phone", "phone_kind",
-    "fit_score", "top_signal", "subject", "disqualifiers", "brief",
+    "identity_confidence", "linkedin", "best_email", "email_confidence",
+    "best_phone", "phone_kind", "fit_score", "top_signal", "subject",
+    "ask_switchboard_for", "disqualifiers", "brief",
 ]
+
+IDENTITY_LABEL = {
+    IdentityConfidence.CONFIRMED: (
+        "CONFIRMED - from the company itself or press"
+    ),
+    IdentityConfidence.AGGREGATOR_ONLY: (
+        "DIRECTORY ONLY - a third-party listing is the only source. "
+        "Could be stale; confirm on the call before using the name"
+    ),
+    IdentityConfidence.ROLE_ONLY: (
+        "ROLE ONLY - the role is proven, the holder is not named"
+    ),
+    IdentityConfidence.UNKNOWN: "UNKNOWN - no basis found",
+}
 
 CONFIDENCE_LABEL = {
     Confidence.VERIFIED: "VERIFIED (published, with a source)",
@@ -104,6 +119,7 @@ def write_csv(prospects: Iterable[Prospect], path: Optional[Path] = None) -> Non
                 "person": p.person.full_name or "",
                 "title": p.person.title or "",
                 "seniority": p.person.seniority or "",
+                "identity_confidence": p.person.identity_confidence.value,
                 "linkedin": p.person.linkedin_url or "",
                 "best_email": email.address if email else "",
                 "email_confidence": email.confidence.value if email else "none",
@@ -116,6 +132,7 @@ def write_csv(prospects: Iterable[Prospect], path: Optional[Path] = None) -> Non
                     if p.outreach and p.outreach.subject_options
                     else ""
                 ),
+                "ask_switchboard_for": p.person.ask_switchboard_for or "",
                 "disqualifiers": "; ".join(p.disqualifiers),
                 "brief": str(BRIEF_DIR / f"{p.slug}.md"),
             }
@@ -138,14 +155,31 @@ def render_brief(
     out: List[str] = []
     w = out.append
 
-    w(f"# {p.person.full_name or 'Unknown contact'} - {p.company.name}")
+    # With no name, lead with the role - that is what you'll ask for.
+    if p.person.full_name:
+        heading = p.person.full_name
+    elif p.person.title:
+        heading = f"{p.person.title} (unnamed)"
+    else:
+        heading = "Unknown contact"
+    w(f"# {heading} - {p.company.name}")
     w("")
     w(f"**Fit score: {p.fit_score}/100** - {p.fit_rationale}")
     w("")
 
     w("## Who")
+    ident = p.person.identity_confidence
     w(f"- **Name:** {p.person.full_name or '_not found_'}")
     w(f"- **Title:** {p.person.title or '_not found_'}")
+    w(f"- **How sure:** {IDENTITY_LABEL[ident]}")
+    if p.person.identity_source_url:
+        w(f"- **Identity source:** {p.person.identity_source_url}")
+    if p.person.evidence_date:
+        w(f"- **Evidence dated:** {p.person.evidence_date}")
+    if p.person.role_confirmed_by:
+        w(f"- **Role confirmed by:** {p.person.role_confirmed_by}")
+    if p.person.ask_switchboard_for:
+        w(f"- **Ask reception for:** \"{p.person.ask_switchboard_for}\"")
     if p.person.seniority:
         w(f"- **Seniority:** {p.person.seniority}")
     if p.person.location:

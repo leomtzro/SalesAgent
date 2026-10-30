@@ -1,5 +1,8 @@
 """Tests for the contact inference - the part that must never invent an address."""
 
+import pytest
+
+from prospector import contact
 from prospector.contact import (
     apply_pattern,
     candidates_for,
@@ -191,3 +194,100 @@ class TestMX:
 
     def test_empty(self):
         assert domain_accepts_mail("") is None
+
+
+class TestMXOnHostileDNS:
+    """Networks that answer NXDOMAIN for everything must not produce false
+    'this domain will bounce' warnings - that sends good prospects to the bin.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        contact.reset_dns_cache()
+        yield
+        contact.reset_dns_cache()
+
+    def _resolver_that(self, behaviour):
+        class FakeNXDOMAIN(Exception):
+            pass
+
+        FakeNXDOMAIN.__name__ = "NXDOMAIN"
+
+        class FakeResolver:
+            lifetime = 5.0
+            timeout = 5.0
+
+            def resolve(self, domain, rdtype):
+                return behaviour(domain, FakeNXDOMAIN)
+
+        return FakeResolver
+
+    def test_nxdomain_for_everything_yields_unknown(self, monkeypatch):
+        def everything_nxdomain(domain, exc):
+            raise exc(f"does not exist: {domain}")
+
+        monkeypatch.setattr(
+            contact, "_resolver", lambda: self._resolver_that(everything_nxdomain)()
+        )
+        # The control domain also fails, so DNS is not believable...
+        assert contact.dns_is_trustworthy() is False
+        # ...and a dead-looking domain must come back unknown, not False.
+        assert contact.domain_accepts_mail("acmesupplements.com") is None
+
+    def test_working_dns_still_reports_a_dead_domain(self, monkeypatch):
+        def controls_work(domain, exc):
+            if domain in contact._DNS_CONTROLS:
+                return ["mx1"]
+            raise exc(f"does not exist: {domain}")
+
+        monkeypatch.setattr(
+            contact, "_resolver", lambda: self._resolver_that(controls_work)()
+        )
+        assert contact.dns_is_trustworthy() is True
+        # DNS is proven good here, so a negative is real and actionable.
+        assert contact.domain_accepts_mail("definitely-not-real-99881.com") is False
+
+    def test_timeout_is_never_reported_as_dead(self, monkeypatch):
+        class Timeout(Exception):
+            pass
+
+        Timeout.__name__ = "LifetimeTimeout"
+
+        def always_timeout(domain, exc):
+            raise Timeout("timed out")
+
+        monkeypatch.setattr(
+            contact, "_resolver", lambda: self._resolver_that(always_timeout)()
+        )
+        assert contact.domain_accepts_mail("acmesupplements.com") is None
+
+    def test_no_bounce_warning_when_dns_is_unreliable(self, monkeypatch):
+        """The user-visible consequence: no scary warning we can't back up."""
+
+        def everything_nxdomain(domain, exc):
+            raise exc("nope")
+
+        monkeypatch.setattr(
+            contact, "_resolver", lambda: self._resolver_that(everything_nxdomain)()
+        )
+        _, warnings = enrich_emails(
+            full_name="Sam Smith", domain="acmesupplements.com", found=[]
+        )
+        assert not any("bounce" in w.lower() for w in warnings), warnings
+
+    def test_control_check_runs_once(self, monkeypatch):
+        calls = []
+
+        def counting(domain, exc):
+            calls.append(domain)
+            if domain in contact._DNS_CONTROLS:
+                return ["mx1"]
+            raise exc("nope")
+
+        monkeypatch.setattr(
+            contact, "_resolver", lambda: self._resolver_that(counting)()
+        )
+        contact.domain_accepts_mail("a-99881.com")
+        contact.domain_accepts_mail("b-99881.com")
+        controls = [d for d in calls if d in contact._DNS_CONTROLS]
+        assert len(controls) == 1, f"control queried {len(controls)} times"

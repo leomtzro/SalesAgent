@@ -230,6 +230,61 @@ def run_research_turn(
     )
 
 
+def preflight(client: anthropic.Anthropic) -> Dict[str, Any]:
+    """One minimal real API call, to prove the whole path works.
+
+    Checks in a single request that the key is accepted, the model is
+    available, the server-side web search tool is enabled for this account,
+    and a search actually returns something. Costs a fraction of a cent -
+    far less than discovering any of this halfway through a 200-company batch.
+    """
+    out: Dict[str, Any] = {
+        "model": _model(),
+        "searched": False,
+        "search_results": 0,
+        "tool_errors": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "answer": "",
+    }
+    response = client.messages.create(
+        model=_model(),
+        max_tokens=1024,
+        system=(
+            "You are checking that web search works. Run exactly one search, "
+            "then reply with a single short sentence."
+        ),
+        messages=[
+            {
+                "role": "user",
+                "content": "Search the web for Anthropic's headquarters city, "
+                "then tell me the city in one sentence.",
+            }
+        ],
+        tools=[{"type": WEB_SEARCH_TOOL, "name": "web_search", "max_uses": 1}],
+        output_config={"effort": "low"},
+    )
+
+    usage = getattr(response, "usage", None)
+    if usage:
+        out["input_tokens"] = getattr(usage, "input_tokens", 0) or 0
+        out["output_tokens"] = getattr(usage, "output_tokens", 0) or 0
+
+    for block in response.content:
+        btype = getattr(block, "type", None)
+        if btype == "server_tool_use" and getattr(block, "name", "") == "web_search":
+            out["searched"] = True
+        if btype == "web_search_tool_result":
+            inner = getattr(block, "content", None)
+            if isinstance(inner, list):
+                out["search_results"] += len(inner)
+
+    out["tool_errors"] = _server_tool_errors(response.content)
+    out["stop_reason"] = response.stop_reason
+    out["answer"] = _text_of(response.content).strip()
+    return out
+
+
 def extract(
     client: anthropic.Anthropic,
     *,

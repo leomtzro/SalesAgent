@@ -156,33 +156,88 @@ def candidates_for(
     return out
 
 
+# Control domains used to prove DNS works before trusting a negative answer.
+# Cached for the process: the answer cannot change mid-run.
+_DNS_CONTROLS = ("google.com", "cloudflare.com")
+_dns_trustworthy: Optional[bool] = None
+
+
+def _resolver():
+    import dns.resolver  # type: ignore
+
+    resolver = dns.resolver.Resolver()
+    resolver.lifetime = 5.0
+    resolver.timeout = 5.0
+    return resolver
+
+
+def dns_is_trustworthy() -> bool:
+    """Can we believe a 'this domain has no mail server' answer?
+
+    Some networks - locked-down containers, captive portals, DNS filters -
+    answer NXDOMAIN for everything rather than timing out. That is
+    indistinguishable from a genuinely dead domain, so without this check every
+    prospect gets a false 'mail to this domain will bounce' warning and good
+    leads get skipped.
+
+    So we ask about a domain that definitely has mail servers first. If even
+    that comes back empty, DNS here is lying and every negative is discarded.
+    """
+    global _dns_trustworthy
+    if _dns_trustworthy is not None:
+        return _dns_trustworthy
+    try:
+        resolver = _resolver()
+    except ImportError:
+        _dns_trustworthy = False
+        return False
+    for control in _DNS_CONTROLS:
+        try:
+            if len(resolver.resolve(control, "MX")) > 0:
+                _dns_trustworthy = True
+                return True
+        except Exception as exc:
+            log.debug("DNS control %s failed: %s", control, exc)
+    log.warning(
+        "DNS cannot resolve %s - MX checking disabled for this run. Email "
+        "domains will not be verified.",
+        " or ".join(_DNS_CONTROLS),
+    )
+    _dns_trustworthy = False
+    return False
+
+
+def reset_dns_cache() -> None:
+    """Forget the control-domain result. For tests."""
+    global _dns_trustworthy
+    _dns_trustworthy = None
+
+
 def domain_accepts_mail(domain: str) -> Optional[bool]:
     """Does this domain have MX records?
 
     True  - the domain can receive mail (says nothing about the mailbox).
     False - no MX; every address at it will bounce.
-    None  - couldn't check (dnspython missing, or DNS blocked).
+    None  - couldn't check (dnspython missing, or DNS unreliable here).
 
-    Cheap, free, and catches the dead-domain case before you send.
+    A False is only ever returned when DNS has been shown to work, because a
+    wrong False is worse than no answer: it tells you to skip a live prospect.
     """
     if not domain:
         return None
     try:
-        import dns.resolver  # type: ignore
+        resolver = _resolver()
     except ImportError:
         log.debug("dnspython not installed; skipping MX check")
         return None
     try:
-        resolver = dns.resolver.Resolver()
-        resolver.lifetime = 5.0
-        resolver.timeout = 5.0
-        answers = resolver.resolve(domain, "MX")
-        return len(answers) > 0
-    except Exception as exc:  # NXDOMAIN, timeout, no answer, ...
-        log.debug("MX lookup failed for %s: %s", domain, exc)
+        return len(resolver.resolve(domain, "MX")) > 0
+    except Exception as exc:
         name = type(exc).__name__
-        if name in ("NXDOMAIN", "NoAnswer"):
+        log.debug("MX lookup failed for %s: %s (%s)", domain, exc, name)
+        if name in ("NXDOMAIN", "NoAnswer") and dns_is_trustworthy():
             return False
+        # Timeout, SERVFAIL, or a network that NXDOMAINs everything: unknown.
         return None
 
 

@@ -32,6 +32,30 @@ class Confidence(str, Enum):
     UNKNOWN = "unknown"
 
 
+class IdentityConfidence(str, Enum):
+    """How sure we are that this is the right person, in the role, right now.
+
+    Emails had a confidence label from the start; the person did not, which was
+    the bigger hole. Most decision makers are not named on their own company's
+    website - the name usually comes from a third-party directory whose data can
+    be a year stale. Opening a call by asking for someone who left eight months
+    ago is worse than asking for the role.
+
+    CONFIRMED       - the company's own site, a press release, a filing, or the
+                      person's own public post or speaker bio.
+    AGGREGATOR_ONLY - only a third-party directory lists them. Treat as a lead,
+                      not a fact, and confirm on the call.
+    ROLE_ONLY       - the role provably exists but nobody is named. Still
+                      workable: ask the switchboard for whoever holds it.
+    UNKNOWN         - no basis.
+    """
+
+    CONFIRMED = "confirmed"
+    AGGREGATOR_ONLY = "aggregator_only"
+    ROLE_ONLY = "role_only"
+    UNKNOWN = "unknown"
+
+
 class Source(BaseModel):
     """Where a claim came from. No source, no claim."""
 
@@ -77,6 +101,36 @@ class Person(BaseModel):
     )
     reports_to: Optional[str] = Field(
         default=None, description="Their boss, if found - useful for escalation."
+    )
+    identity_confidence: IdentityConfidence = Field(
+        default=IdentityConfidence.UNKNOWN,
+        description="How well this person is pinned down. Use 'confirmed' ONLY "
+        "for the company's own site, a press release, a filing, or the person's "
+        "own public post. A third-party directory (theorg, ZoomInfo, Apollo, "
+        "RocketReach, Lusha, seedtable, a job-board company profile) is "
+        "'aggregator_only' however confident it looks. If the role is proven "
+        "but unnamed, use 'role_only' and leave full_name null.",
+    )
+    identity_source_url: Optional[str] = Field(
+        default=None,
+        description="The single page that best backs up this name and title.",
+    )
+    evidence_date: Optional[str] = Field(
+        default=None,
+        description="How fresh the evidence is (YYYY-MM), if the page shows it. "
+        "A two-year-old directory entry is a weak basis for a name.",
+    )
+    role_confirmed_by: Optional[str] = Field(
+        default=None,
+        description="Evidence the ROLE exists, even when the holder is "
+        "unnamed - e.g. 'a Quality Program Manager posting says it reports "
+        "directly to the VP of Ops'. Job postings are the best source for this.",
+    )
+    ask_switchboard_for: Optional[str] = Field(
+        default=None,
+        description="What to say if you have to go through reception - e.g. "
+        "'whoever runs fulfillment and 3PL'. Fill this in whenever the name is "
+        "unconfirmed, because it is the play that still works.",
     )
 
 

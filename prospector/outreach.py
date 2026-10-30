@@ -7,10 +7,13 @@ stops it inventing a case study with your name on it.
 
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 import anthropic
 
 from .client import extract
-from .models import Outreach, ResearchFindings
+from .models import Outreach, Person, ResearchFindings
 from .offer import Offer
 
 OUTREACH_SYSTEM = """You write cold outreach that gets replies, for a seller who
@@ -32,6 +35,24 @@ WHAT GOOD LOOKS LIKE
   no em-dashes stacked three deep, no bullet lists in the body.
 - The ask is small and specific - a 15-minute call, not "exploring synergies".
 - No subject line in title case. No emoji. No "Quick question" alone.
+
+WHEN YOU ARE NOT SURE WHO THEY ARE
+
+Check the prospect's identity_confidence before you write a greeting.
+
+- "confirmed": use their first name normally.
+- "aggregator_only": you may use the first name, but write copy that still
+  works if the name turns out to be wrong - nothing that assumes tenure,
+  history, or a recent promotion. Write the call opener to ask for them by
+  ROLE as a fallback, because they may have left.
+- "role_only" (no name): do NOT invent one and do NOT write a placeholder like
+  "Hi [Name]" or a limp "Hi there". Open with the company and the signal
+  instead - "Saw Acme raised in March" is a perfectly good first line. Write
+  the call opener to ask reception for the role, using ask_switchboard_for.
+
+Never write a bracketed or templated placeholder of any kind. Everything you
+output is sent as-is; an unfilled "[Company]" is the single most embarrassing
+thing a cold email can contain.
 
 HARD CONSTRAINTS
 
@@ -74,6 +95,7 @@ def write_outreach(
     person = findings.person
     who = person.full_name or "the decision maker"
     title = person.title or "unknown title"
+    identity = person.identity_confidence.value
 
     notes_block = ""
     if research_notes.strip():
@@ -86,7 +108,9 @@ def write_outreach(
     user_prompt = (
         f"<prospect>\n{findings.model_dump_json(indent=2)}\n</prospect>\n"
         f"{notes_block}\n"
-        f"Write the outreach for {who} ({title}) at {findings.company.name}.\n\n"
+        f"Write the outreach for {who} ({title}) at {findings.company.name}.\n"
+        f'Their identity_confidence is "{identity}" - follow the rule for that '
+        f"value when you write the greeting and the call opener.\n\n"
         "Anchor the opening on the strongest signal in the record. If there are "
         "no signals, say something true and specific about what the company "
         "does instead - do not pretend to have seen news that isn't there."
@@ -101,13 +125,30 @@ def write_outreach(
     )
 
 
-def lint_outreach(outreach: Outreach, offer: Offer) -> list[str]:
+def lint_outreach(
+    outreach: Outreach, offer: Offer, person: Optional[Person] = None
+) -> list[str]:
     """Mechanical checks on the draft. Cheap insurance against a bad send.
 
     Returns a list of human-readable problems; empty means it passed.
     """
     problems: list[str] = []
     body = outreach.email_body or ""
+
+    # Unfilled template placeholders - the classic humiliating send.
+    for found in set(re.findall(r"\[[A-Za-z _/]{2,30}\]|\{\{[^}]{1,30}\}\}", body)):
+        problems.append(
+            f"Contains an unfilled placeholder {found!r} - never send this."
+        )
+
+    # If no name was established, the copy must not imply we have one.
+    if person is not None and not person.full_name:
+        for greeting in ("hi there", "dear sir", "dear madam", "to whom it may"):
+            if greeting in body.lower():
+                problems.append(
+                    f"Opens with {greeting!r}, but no name was found - lead with "
+                    "the company and the signal instead."
+                )
 
     words = len(body.split())
     limit = offer.voice.max_email_words

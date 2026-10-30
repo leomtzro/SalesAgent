@@ -59,10 +59,16 @@ to write**, and it is where almost all of the quality comes from. It holds:
 ### 4. Check your setup
 
 ```bash
-python -m prospector doctor
+python -m prospector doctor          # offline: key, deps, DNS, config
+python -m prospector doctor --live   # one real API call to prove it works
 ```
 
-It tells you what's still missing before you spend a cent on an API call.
+`doctor` checks everything it can for free. `doctor --live` then makes a single
+real request — one web search — and confirms four things that are otherwise
+only discovered halfway through a batch: the key is accepted, the model is
+available to you, web search is enabled for your account, and a search
+actually returns results. It costs a fraction of a cent. **Run it before your
+first batch.**
 
 ### 5. Run it
 
@@ -110,7 +116,33 @@ The brief contains:
 
 ---
 
-## The one thing to understand: confidence labels
+## The two confidence labels to read before you act
+
+### How sure we are it's the right *person*
+
+This is the one that surprises people. Most companies under a few hundred
+employees **do not publish an ops leadership page**, so the decision maker's
+name usually turns up only in a third-party directory whose data can be a year
+stale. Opening a call by asking for someone who left eight months ago is worse
+than asking for the role.
+
+| Label | Meaning | What to do |
+|---|---|---|
+| `CONFIRMED` | Company's own site, press release, filing, or their own post | Use the name |
+| `DIRECTORY ONLY` | A third-party listing is the only source | Use it, but confirm on the call before trusting it |
+| `ROLE ONLY` | The role is proven; nobody is named | Call the main line and ask for the role — the brief tells you what to say |
+
+`ROLE ONLY` is a **useful result, not a failure.** The agent reads job postings
+to prove the role exists — a posting that says *"this role reports directly to
+the VP of Ops"* confirms there's a VP of Ops to ask for, even with no name
+anywhere. That call still connects. The brief hands you the exact phrasing.
+
+Job postings are mined for two more things while it's in there: the seniority
+ceiling (if the most senior supply-chain title they're hiring is a Director,
+there's probably no COO above them) and the responsibilities, which are a
+plain-language list of what's currently broken, in their own words.
+
+### How sure we are about the *email*
 
 Every email address comes with a label. Read it before you send.
 
@@ -126,7 +158,10 @@ cheerfully produce a plausible address it has never seen. So the work is split:
 - **the agent** reports only addresses it actually *saw on a page*, with the URL
 - **plain Python** (`prospector/contact.py`) derives everything else from the
   company's own published address format, and labels it a guess
-- **DNS** confirms the domain can even receive mail before you bother
+- **DNS** confirms the domain can even receive mail before you bother — and
+  it proves DNS works on a known-good domain *first*, because some networks
+  answer "no such domain" for everything, which would otherwise stamp a false
+  "this will bounce" warning on every prospect you research
 
 Want only the sure things? `--verified-only` throws the guesses away.
 
@@ -204,7 +239,8 @@ search API key, nothing to maintain when a site changes its HTML.
 ## Commands
 
 ```bash
-python -m prospector doctor                    # check setup
+python -m prospector doctor                    # check setup (free)
+python -m prospector doctor --live             # prove it against the real API
 python -m prospector find "Company"            # research one
 python -m prospector batch targets.csv         # research many
 python -m prospector list                      # your pipeline
@@ -274,10 +310,22 @@ two of those reasons are legal, not stylistic.
 python -m pytest tests/ -q
 ```
 
-59 tests, no network and no API key needed — the end-to-end test stands in a
-fake API that returns the same shapes the real one does. They cover the thing
-that matters most: *an address the researcher never saw must come out labelled
-a guess.*
+80 tests, no network and no API key needed. Three layers:
+
+- **Unit** — name parsing, email-pattern inference, config loading, the draft
+  linter.
+- **Pipeline** (`test_pipeline_e2e.py`) — the whole flow against a substituted
+  client. Pins the behaviour that matters most: *an address the researcher
+  never saw must come out labelled a guess.*
+- **Wire** (`test_wire_protocol.py`) — the real SDK talking to a local server
+  that speaks the Messages API. This is the layer that catches a malformed
+  request: a tool type the API would reject, an `output_config` the SDK
+  silently drops, a schema that doesn't serialize. A substituted client can't
+  see any of those.
+
+There are also regression tests for a network that answers NXDOMAIN for every
+domain, because that produced a false "mail will bounce" warning on every
+prospect until it was fixed.
 
 ---
 

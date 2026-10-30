@@ -71,7 +71,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         import dns.resolver  # noqa: F401
 
-        print(f"  {g}✓{x} dnspython installed (email domains will be MX-checked)")
+        from .contact import dns_is_trustworthy
+
+        # The probe logs a warning of its own, which is right during a real
+        # run but duplicates what we print here.
+        _dns_log = logging.getLogger("prospector")
+        _was = _dns_log.level
+        _dns_log.setLevel(logging.ERROR)
+        try:
+            dns_ok = dns_is_trustworthy()
+        finally:
+            _dns_log.setLevel(_was)
+
+        if dns_ok:
+            print(f"  {g}✓{x} DNS works - email domains will be MX-checked")
+        else:
+            print(
+                f"  {y}!{x} DNS can't resolve known-good domains here, so MX "
+                f"checks are off."
+            )
+            print(
+                f"      {dim}Not fatal: addresses just won't be domain-verified. "
+                f"Usually a locked-down network or a DNS filter.{x}"
+            )
     except ImportError:
         print(
             f"  {y}!{x} dnspython missing - MX checks will be skipped. "
@@ -107,11 +129,85 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     model = os.environ.get("PROSPECTOR_MODEL", "claude-opus-5-5")
     print(f"  {g}✓{x} model: {model}")
 
+    if not args.live:
+        print()
+        if ok:
+            print(
+                f"{g}Looks right.{x} Now prove it against the real API:\n"
+                f"  {b}python -m prospector doctor --live{x}  "
+                f"{dim}(one search, a fraction of a cent){x}"
+            )
+            return 0
+        print(f"{r}Fix the above, then run doctor again.{x}")
+        return 1
+
+    # --- live check ---------------------------------------------------------
+    if not ok:
+        print(f"\n{r}Fix the above before running --live.{x}")
+        return 1
+
+    print(f"\n{b}Live check{x} {dim}(one real API call with web search){x}")
+    try:
+        from .client import build_client, preflight
+
+        out = preflight(build_client())
+    except MissingAPIKey as exc:
+        print(f"  {r}✗{x} {exc}")
+        return 2
+    except Exception as exc:
+        name = type(exc).__name__
+        print(f"  {r}✗{x} {name}: {exc}")
+        if "authentication" in str(exc).lower() or name == "AuthenticationError":
+            print(f"      {dim}The key was rejected. Check it in .env.{x}")
+        elif name == "NotFoundError":
+            print(
+                f"      {dim}Model {os.environ.get('PROSPECTOR_MODEL', 'claude-opus-5-5')} "
+                f"isn't available to this key. Set PROSPECTOR_MODEL in .env.{x}"
+            )
+        elif name == "PermissionDeniedError":
+            print(f"      {dim}Key lacks access. Check your console settings.{x}")
+        return 1
+
+    print(f"  {g}✓{x} API key accepted")
+    print(f"  {g}✓{x} model {out['model']} responded")
+
+    if out["tool_errors"]:
+        ok = False
+        print(f"  {r}✗{x} web search errored: {', '.join(out['tool_errors'])}")
+        print(
+            f"      {dim}If this says max_uses_exceeded or similar, web search "
+            f"may not be enabled for your account.{x}"
+        )
+    elif out["searched"] and out["search_results"]:
+        print(
+            f"  {g}✓{x} web search ran and returned "
+            f"{out['search_results']} result(s)"
+        )
+    elif out["searched"]:
+        print(f"  {y}!{x} search ran but returned nothing - unusual, retry once")
+    else:
+        ok = False
+        print(f"  {r}✗{x} the model never called web search")
+        print(
+            f"      {dim}Without search this agent cannot research anything. "
+            f"Check web search is enabled for your org.{x}"
+        )
+
+    if out["answer"]:
+        print(f"      {dim}It said: {out['answer'][:90]}{x}")
+    print(
+        f"      {dim}cost: {out['input_tokens']:,} in / "
+        f"{out['output_tokens']:,} out tokens{x}"
+    )
+
     print()
     if ok:
-        print(f"{g}Ready.{x} Try: {b}python -m prospector find \"Some Company\"{x}")
+        print(
+            f"{g}Working.{x} Go: "
+            f"{b}python -m prospector find \"Some Company\"{x}"
+        )
         return 0
-    print(f"{r}Fix the above, then run doctor again.{x}")
+    print(f"{r}The live check found a problem - see above.{x}")
     return 1
 
 
@@ -128,7 +224,19 @@ def _print_result(result, *, no_color: bool = False) -> None:
     tint = g if score >= 70 else (y if score >= 40 else dim)
 
     print(f"  {g}✓{x} {b}{p.company.name}{x} {tint}[fit {score}]{x}")
-    print(f"      {p.person.full_name or '?'} - {p.person.title or '?'}")
+
+    ident = p.person.identity_confidence.value
+    if p.person.full_name:
+        tag = {
+            "confirmed": "",
+            "aggregator_only": f" {y}(directory only){x}",
+            "unknown": f" {y}(unsourced){x}",
+        }.get(ident, f" {y}({ident}){x}")
+        print(f"      {p.person.full_name} - {p.person.title or '?'}{tag}")
+    else:
+        print(f"      {y}no name{x} - {p.person.title or '?'} {dim}(role confirmed){x}")
+        if p.person.ask_switchboard_for:
+            print(f"      ask reception for: \"{p.person.ask_switchboard_for}\"")
     if email:
         flag = "" if email.confidence.value == "verified" else f" {y}({email.confidence.value}){x}"
         print(f"      {email.address}{flag}")
@@ -317,7 +425,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     d = sub.add_parser("doctor", help="check your setup", parents=[common])
-    d.set_defaults(func=cmd_doctor)
+    d.add_argument(
+        "--live",
+        action="store_true",
+        help="also make one real API call to prove the key, model and web "
+        "search all work (costs a fraction of a cent)",
+    )
+    d.set_defaults(func=cmd_doctor, live=False)
 
     f = sub.add_parser("find", help="research one company", parents=[common])
     f.add_argument("company")
